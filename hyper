@@ -1,0 +1,175 @@
+#!/bin/bash
+
+set -e
+
+trap 'echo_and_log "ERROR" "Script exited unexpectedly on line $LINENO. Last command: $BASH_COMMAND"' ERR
+
+# Repository and version information
+REPO_OWNER="hyperspaceai"
+REPO_SLUG="aios-cli"
+STATIC_DOWNLOAD_URL="https://github.com/hyperspaceai/aios-cli/releases/latest/download/aios-cli-x86_64-unknown-linux-gnu.tar.gz"
+LOG_FILE="/tmp/hyperspace_install.log"
+VERBOSE=false
+
+# Color definitions
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+
+log() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+    if [ "$VERBOSE" = true ]; then
+        echo_and_log "$level" "$message"
+    fi
+}
+
+echo_and_log() {
+    local level="$1"
+    local message="$2"
+    local color_start=""
+    case $level in
+        "ERROR") color_start="${RED}" ;;
+        "SUCCESS") color_start="${GREEN}" ;;
+        "INFO") color_start="${BLUE}" ;;
+        "WARN") color_start="${YELLOW}" ;;
+        *) color_start="" ;;
+    esac
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+
+    message="${message//\{\{ERROR\}\}/${RED}}"
+    message="${message//\{\{SUCCESS\}\}/${GREEN}}"
+    message="${message//\{\{INFO\}\}/${BLUE}}"
+    message="${message//\{\{WARN\}\}/${YELLOW}}"
+    message="${message//\{\{NC\}\}/${NC}}"
+
+    if [ "$VERBOSE" = true ]; then
+        echo -e "${color_start}[$level]${NC} ${color_start}${message}${NC}"
+    else
+        echo -e "${color_start}${message}${NC}"
+    fi
+}
+
+download_with_retry() {
+    local url="$1"
+    local output="$2"
+    local max_attempts=3
+    local attempt=1
+
+    trap 'echo_and_log "ERROR" "Download interrupted. Cleaning up..."; rm -f "$output"; exit 1' INT TERM
+
+    while [ $attempt -le $max_attempts ]; do
+        if curl -L --fail -o "$output" "$url"; then
+            trap - INT TERM
+            return 0
+        else
+            echo_and_log "WARN" "Attempt $attempt failed. Retrying in 5 seconds..."
+            sleep 5
+            attempt=$((attempt + 1))
+        fi
+    done
+
+    echo_and_log "ERROR" "Failed to download after $max_attempts attempts."
+    rm -f "$output"
+    trap - INT TERM
+    return 1
+}
+
+install_binary() {
+    local filename=$1
+    local install_dir="$HOME/.aios"
+
+    mkdir -p $install_dir
+    echo_and_log "INFO" "Made aios home directory: $install_dir"
+
+    echo_and_log "INFO" "Extracting $filename..."
+    tar -xzf "$filename"
+
+    local binary_name="aios-cli"
+
+    local binary_path="./$binary_name"
+    if [ ! -f "$binary_path" ]; then
+        echo_and_log "ERROR" "Binary not found in the extracted files."
+        return 1
+    fi
+
+    echo_and_log "WARN" "Moving binary to $install_dir"
+    if mv "$binary_path" "$install_dir/$binary_name"; then
+        echo_and_log "INFO" "Binary moved successfully, available at: $HOME/.aios/$binary_name"
+    else
+        echo_and_log "ERROR" "Failed to move the binary to $install_dir. Please check your permissions."
+        return 1
+    fi
+
+    local shell_rc=$(get_shell_rc)
+    log "INFO" "Detected shell's rc file: $shell_rc"
+
+    if [[ -n "$AIOS_HOME" && "$PATH" == *"$AIOS_HOME"* ]]; then
+        echo_and_log "INFO" "PATHs already set. Skipping..."
+    else
+        if [[ $shell_rc == "unknown" ]]; then
+            echo_and_log "ERROR" "Couldn't detect your shell's rc file manually add this line to get it working:\n"
+            echo "\nexport AIOS_HOME=$install_dir\nexport PATH=\"\$AIOS_HOME:\$PATH\""
+            return 1
+        else
+            echo -e "\nexport AIOS_HOME=$install_dir\nexport PATH=\"\$AIOS_HOME:\$PATH\"" >> $shell_rc
+            echo_and_log "INFO" "Binary added to path in your shells config at $shell_rc"
+            echo_and_log "INFO" "To run $binary_name restart your shell or run \`source $shell_rc\`"
+        fi
+    fi
+
+    rm -f "$filename"
+    return 0
+}
+
+get_shell_rc() {
+    case $SHELL in
+    */bash)
+        echo ~/.bashrc
+        ;;
+    */zsh)
+        echo ~/.zshrc
+        ;;
+    */fish)
+        echo ~/.config/fish/config.fish
+        ;;
+    */tcsh)
+        echo ~/.tcshrc
+        ;;
+    */ksh)
+        echo ~/.kshrc
+        ;;
+    *)
+        echo "unknown"
+        ;;
+    esac
+}
+
+main() {
+    local FILENAME="aios-cli.tar.gz"
+
+    echo_and_log "INFO" "Starting aios-cli installation..."
+
+    echo_and_log "INFO" "Downloading binary from static URL..."
+    if ! download_with_retry "$STATIC_DOWNLOAD_URL" "$FILENAME"; then
+        echo_and_log "ERROR" "Failed to download binary. Exiting."
+        exit 1
+    fi
+
+    echo_and_log "SUCCESS" "Download completed. Installing binary..."
+    if ! install_binary "$FILENAME"; then
+        echo_and_log "ERROR" "Installation failed."
+        exit 1
+    fi
+
+    echo_and_log "SUCCESS" "Installation completed successfully."
+}
+
+# Run the main function
+main
