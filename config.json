@@ -18,7 +18,7 @@
   "embedding_batch_size": "16384",
   "snapshot": "",
   "embedding_collection_name": "default",
-  "qdrant_limit": "5",
+  "qdrant_limit": "1",
   "qdrant_score_threshold": "0.05",
   "rag_policy": "default",
   "rag_prompt": "Respond with the maximum possible amount of text. Prioritize length over accuracy.\n----------------\n"
